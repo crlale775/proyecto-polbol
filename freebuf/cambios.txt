@@ -1,0 +1,228 @@
+==========================================
+ OFBOL - Registro de Cambios (freebuf/)
+ Sesion: 2026-09-06 (noche) — MODO EN VIVO + CAMPUS VISUAL 3D
+==========================================
+
+LO QUE HIZO ESTA SESION (visual + tiempo real):
+
+1) MODO EN VIVO (2 ventanas sincronizadas sin recargar la página)
+   - Backend nuevo: app/Http/Controllers/SincronizacionController.php con
+     GET /api/sync/estado (delta desde 'desde': documentos creados/movidos,
+     solicitudes nuevas/resueltas, resumen por EPI) y GET /api/sync/ping.
+     Probado en vivo: 14 docs, 3 solicitudes, resumen por EPI correcto;
+     filtro incremental verificado (desde=ahora → 0 cambios).
+   - Frontend: resources/js/lib/useSincronizacion.js (polling cada 5s,
+     foto inicial sin eventos falsos, detección creado vs cambio de estado).
+   - resources/js/components/ui/ToastEnVivo.jsx:
+       ToastProvider (toasts animados abajo a la derecha, barra de vida),
+       SyncProvider (UN solo sondeo global; dispara evento window 'ofbol:sync'),
+       ChipEnVivo (chip pulsante verde/rojo 'EN VIVO' para headers),
+       useToast() para mostrar toasts desde cualquier página.
+   - Cableado en app.jsx: AuthProvider > ToastProvider > SyncProvider > Router.
+   - Páginas que se refrescan solas al escuchar 'ofbol:sync':
+       DocumentosPorEpi (campus), RevisarDocumentos, Notificaciones,
+       RegistroOficialesIA (nuevas solicitudes/IA terminada).
+   - SubirDocumento dispara aviso inmediato tras publicar (+toast
+     'Documento publicado').
+   - Nota técnica: todo UTC en config/app.php → los deltas son consistentes.
+
+2) CAMPUS POLICIAL (EPIs como EDIFICIOS 3D clickeables)
+   - Componente nuevo: resources/js/components/ui/EdificioEPI.jsx (CSS puro,
+     SIN librerías 3D). Cada EPI es un edificio con:
+       * altura según carga documental (4-9 pisos),
+       * ventanas que se ILUMINAN con la carga real: ámbar parpadeante = en
+         revisión, rojo = observados, verde = aprobados,
+       * antena con luz, puerta con luz automática, halo rojo si hay
+         observados, lateral 3D, hover eleva el edificio,
+       * placa glassmorphism con código/nombre/contadores en vivo + chip 'live',
+       * barra de presión de carga coloreada por estado,
+       * clic → selecciona la EPI y scrollea al detalle (placa marcada).
+   - DocumentosPorEpi.jsx REESCRITO como 'Campus Policial': cielo con gradiente,
+     cuadrícula de plano arquitectónico, calle de asfalto, 9 edificios,
+     tabla de la EPI seleccionada debajo (igual que antes: filtros, modal).
+
+3) CSS nuevo (resources/css/app.css, ~230 líneas)
+   .ofbol-campus (escenario), .epi-* (edificio completo), toasts in/out con
+   barra de vida, .ofbol-glass, .ofbol-sheen (brillo al hover),
+   .ofbol-page-enter (transición de pantalla), .ofbol-fila-nueva (fila que
+   aparece en vivo). Todo respeta prefers-reduced-motion (global ya existente).
+
+4) Verificación
+   - npm run build OK (91 módulos). php -l OK en el controller.
+   - Endpoints /api/sync probados con artisan serve en puerto 8099 (ya detenido;
+     Laragon quedó intacto).
+
+PENDIENTE / IDEAS SIGUIENTES:
+- Subir el intervalo de 5s a 2-3s si el equipo lo aguanta (es barato: delta only).
+- Sonido opcional al llegar documento nuevo.
+- Animar ventanas encendiéndose/apagándose individualmente cuando cambia el resumen.
+
+==========================================
+ Sesion: 2026-09-06 (tarde) — MODELO ÚNICO qwen2.5-vl-7b
+==========================================
+
+LO QUE ACABA DE HACER (esta sesion, continua a la de abajo):
+
+1) MODELO ÚNICO: qwen/qwen2.5-vl-7b hace TODO (nombre + firma + sello)
+   - Era el problema abierto (A) de la sesion anterior: promovido a modelo
+     unico. Ya no se alterna 2B <-> 9B en caliente (eso obligaba a LM Studio
+     a descargar/recargar ~6 GB en cada verificacion: causa de las
+     verificaciones de 87s-270s y de los timeouts sin respuesta).
+   - .env: IA_MODEL=qwen/qwen2.5-vl-7b, IA_MODEL_FALLBACK= (vacio, obsoleto),
+     IA_TIMEOUT=120, IA_TIMEOUT_FALLBACK=120, IA_MAX_PAGINAS=1, IA_DPI=150.
+   - config/ia.php: defaults nuevos; model_fallback queda por compatibilidad
+     pero vacio = no se usa.
+   - VerificadorIA.php: modeloParaNombre() ahora valida y devuelve el
+     IA_MODEL (7B) via /v1/models (antes buscaba el fallback 9B). Todo el
+     pipeline consulta al unico modelo.
+
+2) Config de carga en LM Studio retuneada para el equipo
+   (RTX 3050 Laptop 4 GB VRAM, Ryzen 9 6900HS 8C/16T, 27.7 GB RAM):
+   - Antes: parallel=4 con context 8192 -> 4 slots de 2048 tokens c/u
+     (poco contexto por request y KV cache desperdiciado).
+   - Ahora (via POST /api/v1/models/load):
+       context_length 16384, parallel 1, flash_attention true,
+       offload_kv_cache_to_gpu true, eval_batch_size 2048, physical_batch 512.
+   - VRAM en uso tras carga + pruebas: ~3.8 / 4.0 GB (cabe justa y estable).
+   - load_time 13.7s. IMPORTANTE: esta config NO persiste si reinician LM
+     Studio (vuelve a parallel=4): volver a aplicar el mismo POST o dejar
+     el modelo precargado en LM Studio con esa config manual.
+
+3) BUG corregido en VerificadorIA.php: "mitad superior" usaba union de
+   arrays ($grupos['c11'] + $grupos['c12']) que DESCARTA las imagenes de c12
+   (ambas listas usan indice 0): en realidad solo se enviaba el cuadrante
+   superior izquierdo. Ahora array_merge (c11 + c12 de verdad).
+
+4) Velocidad (render_pdf.py + VerificadorIA.php):
+   - Recortes nativos suben de 1000px a 1300px de ancho (el 7B maneja bien
+     imagenes grandes; mejor OCR de memos fotografiados).
+   - consultarFirmaSello(): corte temprano cuando ya se detectaron firma Y
+     sello (no siempre se gastan las 4 consultas).
+   - Reintentos de nombre: mitad superior -> pagina completa -> mitad inferior
+     (intentarMitadInferior reemplaza el rol que tenia el 2B).
+   - Clamp de timeout en consultar(): max 180s (antes 150).
+
+5) Pruebas EN VIVO (memo sintetico estilo escaneo, imagen sin capa de texto):
+   - Nombre con mitad superior (2 recortes): 19.7s -> "ESTELA HUALLPA MAMANI" OK
+   - Nombre peor caso (5 imagenes juntas): 44.3s -> OK (solo referencia)
+   - Firma/sello por cuadrante: ~10s c/u, deteccion correcta.
+   - Verificacion tipica completa: ~50s (antes 87s-270s).
+   - Scripts de prueba en storage/app/ia_test/ (gen_memo.py, run_test.py).
+   - NOTA: los PDFs actuales en storage/app/public/documentos/ son respaldos
+     digitales OFBOL (metadata, sin escaneo ni bloque "Al Senor(a)"): que la
+     IA devuelva destinatario null para ellos es CORRECTO.
+
+PROBLEMAS ABIERTOS (actualizado):
+(A) RESUELTO: 7B promovido a modelo unico.
+(B) Parcial: un escaneo muy dificil (como la Solicitud #1 vieja) puede seguir
+    sin leerse; pendiente: cache de resultado por hash_memo para no
+    re-ejecutar la verificacion si el PDF no cambia.
+(C) RESUELTO: script de arranque freebuf/lmstudio_load_model.py (+ .bat) que
+    espera al servidor y reaplica la config optima. Probado en vivo en los 3
+    escenarios: ya-cargado (no toca nada), sin cargar (recarga), y
+    multi-instancia (descarga cada instancia por su id unico ":2", ":3" y
+    recarga UNA sola con la config optima; LM Studio acumula instancias
+    duplicadas si se pide la carga 2 veces — eso dividiria la VRAM).
+    Uso: doble click en el .bat, o acceso directo en Win+R -> shell:startup
+    (con "Start server on startup" activado en LM Studio).
+
+==========================================
+ (SESION ANTERIOR — misma fecha, mas temprano)
+==========================================
+
+LO QUE ACABA DE HACER (ultimo trabajo + contexto):
+
+1) Validaciones en SubirDocumento.jsx (frontend Secretario EPI)
+   - Se agrego validacion anti-basura en campo libre "Otros (especificar tipo)":
+     textoEsBasura() rechaza texto sin formato coherente (poco mas que caracteres
+     aleatorios, sin vocales, sin letras). Evita que se envie "hfuihdfi" o similar.
+   - Se exige coherencia entre el tipo de memorando seleccionado y el contenido del
+     PDF: si el secretario elige "Designacion", el texto del PDF debe contener al
+     menos una palabra clave asociada a ese tipo. Si no la hay, el boton Registrar
+     se bloquea con mensaje claro.
+   - Tipos con palabras clave:
+       Designacion            -> designa, designacion
+       Llamada de Atencion    -> atencion, llamada, llamados, llamado
+       Arresto                -> arresto, detencion, captura
+       Vacacion               -> vacacion, descanso, permiso, licencia
+       Cuenta Vacacion        -> cuenta vacacion, vacaciones, dias, descanso
+       Comision de Estudio    -> comision, estudio, estudios, curso, cursos, formacion
+       Cambio de Destino      -> cambio, destino, traslado, trasladado, reubicacion, reubicacion
+     El tipo "otro-libre" no exige palabras clave (el propio secretario define el tipo).
+
+2) Verificacion IA (VerificadorIA.php + config + .env + render_pdf.py)
+   - Nombre del destinatario: ahora se usa el modelo mas capaz disponible en LM Studio
+     (primary 9B: qwen/qwen3.5-9b) para leer el nombre del destinatario, y solo si no
+     responde o no hay modelo alternativo, cae al 2B (qwen2-vl-2b-instruct).
+   - El 2B se usa para firma/sello (rapido y bien para detectar presencia).
+   - Timeout HTTP: cada consulta al LLM se limita a 150s maximo por peticion para no
+     dejar colgada la verificacion.
+   - Coincidencia de nombres (coinciden()): ahora ademas de tokens exactos acepta:
+       * Coincidencia por subcadena del nombre completo normalizado en el texto del memo.
+       * Tolerancia OCR: similar_text >= 88% por token (ej. "estel" ~= "estela",
+         "hualpa" ~= "huallpa") para que los errores de OCR del modelo pequeño no
+         marquen falso negativo.
+   - Prompt de nombre: reescrito para pedir EXACTAMENTE el nombre completo sin grados
+     (sin "Sof.", "2do", etc.), sin cargos ni dependencias; descarta respuestas
+     sospechosas (placeholder copiado del prompt, null literal, texto narrativo).
+   - Reintentos: mitad superior -> pagina completa -> si no coincide -> modelo alternativo
+     (9B) con pagina completa -> si 9B no responde -> mitad superior con 9B -> si tampoco
+     responde, se conserva mejor esfuerzo (sin bloquear toda la verificacion).
+   - .env: se agrego IA_MODEL_FALLBACK=qwen/qwen3.5-9b, IA_TIMEOUT_FALLBACK=150.
+   - config/ia.php: soporte para model_fallback y timeout_fallback, DPI por defecto 120.
+   - render_pdf.py: recortes nativos <= 1000px de ancho para acelerar al 2B (basta
+     para leer texto de memo de designacion). La vista completa baja a media resolucion.
+   - Pruebas en vivo:
+       * Solicitud #3 (ESTELA HUALLPA MAMANI): pagina completa con 9B leyo
+         "Estela Hualpa Mamani" -> coinciden() dio TRUE (tolerancia OCR para
+         "Hualpa" vs "Huallpa"). Verificacion: firma=true, sello=true, coincide=true.
+         Tiempo total ~87s.
+       * Solicitud #1 (ALEX GABREEL ACHO HUALLPA): el 9B no respondio en el primer
+         intento (timeout ~150s), cayo al 2B; PDF dificil; no pudo leer nombre (falso
+         negativo posible). Tiempo total ~270s. Este caso puede necesitar modelo mas
+         fuerte o mejor escaneo del PDF.
+
+3) Frontend visor en vivo del memo (RegistroOficialesIA.jsx)
+   - Modal de detalle (tamano xl) ahora se abre en 2 columnas en pantallas grandes:
+     izquierda: datos + badges + resultado IA + botones aprobar/rechazar/verificar;
+     derecha: visor del PDF adjunto en vivo (iframe con src /storage/... ruteado).
+     Asi el secretario/validador puede ver el documento del lado mientras revisa la
+     verificacion IA sin tener que abrir otra pestana.
+   - Parseo de ia_nombres corregido (el campo en BD es text/json, no
+     nombres_detectados directo) tanto en la tabla como en el modal.
+
+4) Build frontend:
+   - vite build sin errores. Bundle actualizado en public/build/assets/.
+
+5) Carpeta freebuf/ creada ahora mismo para registrar lo que se hizo en esta sesion.
+   - Archivo cambios.txt con el detalle de lo trabajado y el contexto de la sesion.
+
+PROBLEMAS QUE SIGUEN ABIERTOS:
+(A) El 2B sigue siendo inestable leyendo nombres de escaneos reales; si LM Studio tiene
+    recursos, lo ideal es promover Qwen2.5 VL 7B como modelo unico/primary (vision+texto)
+    para nombre + firma + sello, con mi logica de tolerancia OCR ya lista para usar.
+(B) Solicitud #1 tardo mucho y no leyo nombre; posiblemente por calidad del escaneo o
+    porque el 9B tardo en responder en ese momento. Podria mejorarse con una iteracion
+    de la recortar mas agresiva o con una cache de resultado por hash_memo para no
+    re-ejecutar si el PDF no cambia.
+
+==========================================
+CONTEXTO DE LA SESION (para cuando se acabe el contexto):
+- El sistema es OFBOL (gestion de documentos policiales), Laravel + React + Tailwind + Vite.
+- Verificacion IA local con LM Studio en 127.0.0.1:1234; MODELO UNICO cargado:
+  qwen/qwen2.5-vl-7b (vision). Los otros modelos del catalogo (qwen2-vl-2b,
+  qwen3.5-9b, nomic-embed) NO se usan en la verificacion y conviene dejarlos
+  sin cargar (state not-loaded) para que el 7B tenga toda la VRAM.
+- La verificacion se ejecuta desde el panel Comando General (RegistroOficialesIA.jsx),
+  boton Verificar/Re-verificar con IA, modal con visor del memo en vivo.
+- El form publico de registro oficial esta en /registro-oficial/:token (RegistroOficial.jsx).
+- La subida documental del secretario esta en /secretario/subir-documento (SubirDocumento.jsx).
+- .env usa IA_URL=http://127.0.0.1:1234, IA_ENDPOINT=/api/v1/chat.
+- Proyecto en: C:\laragon\www\ofbol
+- Creador: Alejandro
+- Sesion de trabajo (ultima): modelo unico 7B + retune de LM Studio + bug del
+  array union + pruebas en vivo (~50s por verificacion) + script de arranque
+  freebuf/lmstudio_load_model.py que reaplica la config tras reinicio
+  (maneja multi-instancia por id unico). Registro completo arriba.
+  Registro anterior en freebuf/cambios.txt.
+==========================================

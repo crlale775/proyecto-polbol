@@ -1,0 +1,6 @@
+{
+  "$schema": "https://react.doctor/schema.json",
+  "ignore": {
+    "files": ["vendor/**", "node_modules/**", "public/**", "storage/**"]
+  }
+}

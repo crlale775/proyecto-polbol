@@ -1,0 +1,356 @@
+-- ==========================================
+-- ESTRUCTURA OFICIAL DE LA BASE DE DATOS POLICIAL
+-- PostgreSQL / pgAdmin 4
+-- ==========================================
+
+BEGIN;
+
+-- ------------------------------------------
+-- MÓDULO 1. SEGURIDAD
+-- ------------------------------------------
+
+CREATE TABLE roles (
+    id_rol SERIAL PRIMARY KEY,
+    nombre VARCHAR(50) NOT NULL UNIQUE,
+    descripcion TEXT,
+    estado BOOLEAN NOT NULL DEFAULT TRUE,
+    CONSTRAINT chk_rol_no_admin CHECK (LOWER(nombre) NOT LIKE '%admin%')
+);
+
+-- MÓDULO 2 PREVIO (Para FK en usuarios y epis)
+CREATE TABLE comando_departamental (
+    id_comando SERIAL PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL DEFAULT 'Comando Departamental de La Paz',
+    departamento VARCHAR(50) NOT NULL DEFAULT 'La Paz'
+);
+
+CREATE TABLE epis (
+    id_epi SERIAL PRIMARY KEY,
+    id_comando INT NOT NULL DEFAULT 1,
+    nombre VARCHAR(100) NOT NULL,
+    direccion TEXT,
+    telefono VARCHAR(20),
+    estado BOOLEAN NOT NULL DEFAULT TRUE,
+    CONSTRAINT fk_epis_comando FOREIGN KEY (id_comando) REFERENCES comando_departamental(id_comando) ON UPDATE CASCADE ON DELETE RESTRICT
+);
+
+-- 3. MEJORA: Relación entre Usuarios y EPI (id_epi nullable para roles a nivel Departamental/General)
+CREATE TABLE usuarios (
+    id_usuario SERIAL PRIMARY KEY,
+    id_rol INT NOT NULL,
+    id_epi INT, 
+    usuario VARCHAR(50) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    correo VARCHAR(100) NOT NULL UNIQUE,
+    estado BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_usuarios_roles FOREIGN KEY (id_rol) REFERENCES roles(id_rol) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT fk_usuarios_epis FOREIGN KEY (id_epi) REFERENCES epis(id_epi) ON UPDATE CASCADE ON DELETE RESTRICT
+);
+
+CREATE TABLE sesiones (
+    id_sesion BIGSERIAL PRIMARY KEY,
+    id_usuario INT NOT NULL,
+    ip VARCHAR(45) NOT NULL,
+    fecha_inicio TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    fecha_fin TIMESTAMP WITHOUT TIME ZONE,
+    CONSTRAINT fk_sesiones_usuarios FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario) ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE TABLE auditoria (
+    id_auditoria BIGSERIAL PRIMARY KEY,
+    id_usuario INT,
+    tabla VARCHAR(50) NOT NULL,
+    accion VARCHAR(20) NOT NULL, -- INSERT, UPDATE, DELETE
+    descripcion TEXT,
+    fecha TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_auditoria_usuarios FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario) ON UPDATE CASCADE ON DELETE SET NULL
+);
+
+-- ------------------------------------------
+-- MÓDULO 2. ORGANIZACIÓN Y PERSONAL
+-- ------------------------------------------
+
+CREATE TABLE cargos (
+    id_cargo SERIAL PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL UNIQUE
+);
+
+CREATE TABLE grados (
+    id_grado SERIAL PRIMARY KEY,
+    nombre VARCHAR(50) NOT NULL,
+    abreviatura VARCHAR(10) NOT NULL UNIQUE
+);
+
+-- 7. MEJORA: Incorporación de numero_item y codigo_institucional
+CREATE TABLE oficiales (
+    id_oficial SERIAL PRIMARY KEY,
+    id_grado INT NOT NULL,
+    id_epi INT NOT NULL,
+    id_cargo INT NOT NULL,
+    numero_item VARCHAR(20) UNIQUE,
+    codigo_institucional VARCHAR(30) UNIQUE,
+    escalafon VARCHAR(50) NOT NULL UNIQUE,
+    ci VARCHAR(20) NOT NULL UNIQUE,
+    nombres VARCHAR(100) NOT NULL,
+    apellidos VARCHAR(100) NOT NULL,
+    estado BOOLEAN NOT NULL DEFAULT TRUE,
+    CONSTRAINT fk_oficiales_grados FOREIGN KEY (id_grado) REFERENCES grados(id_grado) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT fk_oficiales_epis FOREIGN KEY (id_epi) REFERENCES epis(id_epi) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT fk_oficiales_cargos FOREIGN KEY (id_cargo) REFERENCES cargos(id_cargo) ON UPDATE CASCADE ON DELETE RESTRICT
+);
+
+CREATE TABLE historial_destinos (
+    id_historial SERIAL PRIMARY KEY,
+    id_oficial INT NOT NULL,
+    id_epi INT NOT NULL,
+    fecha_inicio DATE NOT NULL,
+    fecha_fin DATE,
+    CONSTRAINT fk_historial_oficiales FOREIGN KEY (id_oficial) REFERENCES oficiales(id_oficial) ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_historial_epis FOREIGN KEY (id_epi) REFERENCES epis(id_epi) ON UPDATE CASCADE ON DELETE RESTRICT
+);
+
+-- ------------------------------------------
+-- MÓDULO 3. CATÁLOGOS Y PLANTILLAS
+-- ------------------------------------------
+
+CREATE TABLE tipos_documento (
+    id_tipo SERIAL PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL UNIQUE
+);
+
+CREATE TABLE estados_documento (
+    id_estado SERIAL PRIMARY KEY,
+    nombre VARCHAR(50) NOT NULL UNIQUE
+);
+
+-- 5. MEJORA: Catálogo de Tipos de Observación
+CREATE TABLE tipos_observacion (
+    id_tipo SERIAL PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL UNIQUE,
+    descripcion TEXT
+);
+
+-- 6. MEJORA: Historial y control de versiones en Plantillas
+CREATE TABLE plantillas (
+    id_plantilla SERIAL PRIMARY KEY,
+    id_tipo_documento INT NOT NULL,
+    nombre VARCHAR(150) NOT NULL,
+    version INT NOT NULL DEFAULT 1,
+    ruta_archivo VARCHAR(500) NOT NULL,
+    activo BOOLEAN NOT NULL DEFAULT TRUE,
+    fecha_carga TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    subido_por INT NOT NULL,
+    CONSTRAINT fk_plantillas_tipos_doc FOREIGN KEY (id_tipo_documento) REFERENCES tipos_documento(id_tipo) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT fk_plantillas_usuarios FOREIGN KEY (subido_por) REFERENCES usuarios(id_usuario) ON UPDATE CASCADE ON DELETE RESTRICT
+);
+
+CREATE TABLE configuracion (
+    id SERIAL PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL UNIQUE,
+    valor TEXT NOT NULL
+);
+
+-- ------------------------------------------
+-- MÓDULO 4. DOCUMENTOS Y REVISIONES
+-- ------------------------------------------
+
+CREATE TABLE documentos (
+    id_documento BIGSERIAL PRIMARY KEY,
+    id_tipo INT NOT NULL,
+    id_oficial INT NOT NULL,
+    id_usuario INT NOT NULL,
+    id_epi INT NOT NULL,
+    codigo_documento VARCHAR(50) NOT NULL UNIQUE,
+    referencia VARCHAR(255) NOT NULL,
+    ruta_pdf VARCHAR(500) NOT NULL,
+    hash VARCHAR(64) NOT NULL, -- SHA-256
+    fecha_subida TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    estado_actual INT NOT NULL,
+    CONSTRAINT fk_documentos_tipos FOREIGN KEY (id_tipo) REFERENCES tipos_documento(id_tipo) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT fk_documentos_oficiales FOREIGN KEY (id_oficial) REFERENCES oficiales(id_oficial) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT fk_documentos_usuarios FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT fk_documentos_epis FOREIGN KEY (id_epi) REFERENCES epis(id_epi) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT fk_documentos_estados FOREIGN KEY (estado_actual) REFERENCES estados_documento(id_estado) ON UPDATE CASCADE ON DELETE RESTRICT
+);
+
+CREATE TABLE versiones_documento (
+    id_version BIGSERIAL PRIMARY KEY,
+    id_documento BIGINT NOT NULL,
+    version INT NOT NULL,
+    ruta_pdf VARCHAR(500) NOT NULL,
+    fecha TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    subido_por INT NOT NULL,
+    CONSTRAINT fk_versiones_documentos FOREIGN KEY (id_documento) REFERENCES documentos(id_documento) ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_versiones_usuarios FOREIGN KEY (subido_por) REFERENCES usuarios(id_usuario) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT uq_documento_version UNIQUE (id_documento, version)
+);
+
+-- 5. MEJORA: Revisiones ligadas al catálogo de tipos de observación
+CREATE TABLE revisiones (
+    id_revision BIGSERIAL PRIMARY KEY,
+    id_documento BIGINT NOT NULL,
+    usuario_revisor INT NOT NULL,
+    id_tipo_observacion INT,
+    nivel_revision VARCHAR(50) NOT NULL,
+    estado VARCHAR(50) NOT NULL,
+    observacion_libre TEXT,
+    fecha TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_revisiones_documentos FOREIGN KEY (id_documento) REFERENCES documentos(id_documento) ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_revisiones_usuarios FOREIGN KEY (usuario_revisor) REFERENCES usuarios(id_usuario) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT fk_revisiones_tipos_obs FOREIGN KEY (id_tipo_observacion) REFERENCES tipos_observacion(id_tipo) ON UPDATE CASCADE ON DELETE SET NULL
+);
+
+-- ------------------------------------------
+-- MÓDULO 5. SISTEMA EXPERTO
+-- ------------------------------------------
+
+CREATE TABLE normas (
+    id_norma SERIAL PRIMARY KEY,
+    codigo VARCHAR(50) NOT NULL UNIQUE,
+    nombre VARCHAR(255) NOT NULL,
+    version VARCHAR(20) NOT NULL,
+    vigente BOOLEAN NOT NULL DEFAULT TRUE,
+    fecha_inicio DATE NOT NULL,
+    fecha_fin DATE
+);
+
+CREATE TABLE articulos (
+    id_articulo SERIAL PRIMARY KEY,
+    id_norma INT NOT NULL,
+    numero VARCHAR(20) NOT NULL,
+    titulo VARCHAR(255),
+    texto TEXT NOT NULL,
+    CONSTRAINT fk_articulos_normas FOREIGN KEY (id_norma) REFERENCES normas(id_norma) ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE TABLE reglas (
+    id_regla SERIAL PRIMARY KEY,
+    id_articulo INT NOT NULL,
+    nombre VARCHAR(150) NOT NULL,
+    descripcion TEXT,
+    tipo_documento INT NOT NULL,
+    observacion_sugerida TEXT,
+    CONSTRAINT fk_reglas_articulos FOREIGN KEY (id_articulo) REFERENCES articulos(id_articulo) ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_reglas_tipos_doc FOREIGN KEY (tipo_documento) REFERENCES tipos_documento(id_tipo) ON UPDATE CASCADE ON DELETE RESTRICT
+);
+
+CREATE TABLE validaciones (
+    id_validacion BIGSERIAL PRIMARY KEY,
+    id_documento BIGINT NOT NULL,
+    id_regla INT NOT NULL,
+    resultado VARCHAR(20) NOT NULL, -- Correcto, Advertencia, Error
+    mensaje TEXT NOT NULL,
+    fecha TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_validaciones_documentos FOREIGN KEY (id_documento) REFERENCES documentos(id_documento) ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_validaciones_reglas FOREIGN KEY (id_regla) REFERENCES reglas(id_regla) ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+-- ------------------------------------------
+-- MÓDULO 6. FLUJO DE TRABAJO Y NOTIFICACIONES
+-- ------------------------------------------
+
+-- 2. MEJORA: Flujo normalizado mediante Foreign Keys (origen_epi, destino_epi, id_estado_flujo)
+CREATE TABLE flujo_documentos (
+    id_flujo BIGSERIAL PRIMARY KEY,
+    id_documento BIGINT NOT NULL,
+    origen_epi INT NOT NULL,
+    destino_epi INT,
+    id_estado_flujo INT NOT NULL,
+    usuario INT NOT NULL,
+    fecha TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_flujo_documentos FOREIGN KEY (id_documento) REFERENCES documentos(id_documento) ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_flujo_origen_epi FOREIGN KEY (origen_epi) REFERENCES epis(id_epi) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT fk_flujo_destino_epi FOREIGN KEY (destino_epi) REFERENCES epis(id_epi) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT fk_flujo_estado FOREIGN KEY (id_estado_flujo) REFERENCES estados_documento(id_estado) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT fk_flujo_usuarios FOREIGN KEY (usuario) REFERENCES usuarios(id_usuario) ON UPDATE CASCADE ON DELETE RESTRICT
+);
+
+CREATE TABLE historial_estados (
+    id_historial BIGSERIAL PRIMARY KEY,
+    id_documento BIGINT NOT NULL,
+    estado_anterior INT,
+    estado_nuevo INT NOT NULL,
+    usuario INT NOT NULL,
+    fecha TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_historial_documentos FOREIGN KEY (id_documento) REFERENCES documentos(id_documento) ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_historial_estado_ant FOREIGN KEY (estado_anterior) REFERENCES estados_documento(id_estado) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT fk_historial_estado_nue FOREIGN KEY (estado_nuevo) REFERENCES estados_documento(id_estado) ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT fk_historial_usuarios FOREIGN KEY (usuario) REFERENCES usuarios(id_usuario) ON UPDATE CASCADE ON DELETE RESTRICT
+);
+
+-- 4. MEJORA: Tabla de Notificaciones
+CREATE TABLE notificaciones (
+    id_notificacion BIGSERIAL PRIMARY KEY,
+    id_usuario INT NOT NULL,
+    id_documento BIGINT,
+    titulo VARCHAR(150) NOT NULL,
+    mensaje TEXT NOT NULL,
+    leido BOOLEAN NOT NULL DEFAULT FALSE,
+    fecha TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_notificaciones_usuarios FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario) ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_notificaciones_documentos FOREIGN KEY (id_documento) REFERENCES documentos(id_documento) ON UPDATE CASCADE ON DELETE SET NULL
+);
+
+-- ------------------------------------------
+-- 9. ÍNDICES DE RENDIMIENTO (BÚSQUEDAS FRECUENTES)
+-- ------------------------------------------
+
+CREATE INDEX idx_oficiales_ci ON oficiales(ci);
+CREATE INDEX idx_oficiales_escalafon ON oficiales(escalafon);
+CREATE INDEX idx_oficiales_item ON oficiales(numero_item);
+CREATE INDEX idx_oficiales_codigo ON oficiales(codigo_institucional);
+
+CREATE INDEX idx_documentos_codigo ON documentos(codigo_documento);
+CREATE INDEX idx_documentos_estado ON documentos(estado_actual);
+CREATE INDEX idx_documentos_fecha ON documentos(fecha_subida);
+CREATE INDEX idx_documentos_oficial ON documentos(id_oficial);
+CREATE INDEX idx_documentos_usuario ON documentos(id_usuario);
+CREATE INDEX idx_documentos_epi ON documentos(id_epi);
+
+CREATE INDEX idx_flujo_documento ON flujo_documentos(id_documento);
+CREATE INDEX idx_flujo_estado ON flujo_documentos(id_estado_flujo);
+CREATE INDEX idx_flujo_fecha ON flujo_documentos(fecha);
+
+CREATE INDEX idx_usuarios_epi ON usuarios(id_epi);
+CREATE INDEX idx_notificaciones_usuario_leido ON notificaciones(id_usuario, leido);
+
+-- ------------------------------------------
+-- DATOS SEMILLA
+-- ------------------------------------------
+
+INSERT INTO comando_departamental (id_comando, nombre, departamento) 
+VALUES (1, 'Comando Departamental de La Paz', 'La Paz')
+ON CONFLICT (id_comando) DO NOTHING;
+
+INSERT INTO roles (nombre, descripcion) VALUES
+('Secretario EPI', 'Carga, edición y envío de documentos en la EPI asignada'),
+('Revisor Comando Departamental', 'Revisión, validación y observación de documentos recibidos'),
+('Comando General', 'Aprobación final, seguimiento e inspección general');
+
+INSERT INTO tipos_documento (nombre) VALUES
+('Memorándum disciplinario'),
+('Memorándum felicitación'),
+('Permiso'),
+('Vacación'),
+('Designación'),
+('Otro');
+
+INSERT INTO estados_documento (nombre) VALUES
+('Borrador'),
+('Enviado por EPI'),
+('En revisión'),
+('Observado'),
+('Devuelto'),
+('Aprobado'),
+('Remitido al Comando General'),
+('Registrado');
+
+INSERT INTO tipos_observacion (nombre, descripcion) VALUES
+('Firma faltante', 'Falta la firma digital o física requerida'),
+('Fecha incorrecta', 'Inconsistencia en las fechas del documento'),
+('Documento ilegible', 'El escaneo o PDF adjunto no es legible'),
+('Datos inconsistentes', 'Los datos del oficial no coinciden con el sistema'),
+('Otro', 'Observación general');
+
+COMMIT;
